@@ -67,20 +67,20 @@ func (a *App) initUI() {
 		SetRegions(true).
 		SetWrap(false).
 		SetScrollable(false)
-	a.moduleBar.SetBorder(true).SetTitle("模块选择")
+	a.moduleBar.SetBorder(true).SetTitle("模块选择").SetTitleAlign(tview.AlignLeft)
 
 	// 创建中间主面板 - 显示主要内容
 	a.mainPanel = tview.NewTextView().
 		SetDynamicColors(true).
 		SetWrap(true).
 		SetScrollable(true)
-	a.mainPanel.SetBorder(true).SetTitle("主要内容")
+	a.mainPanel.SetBorder(true).SetTitle("主要内容").SetTitleAlign(tview.AlignLeft)
 
 	// 创建底部状态栏组件，用于显示应用程序状态信息
 	a.statusBar = tview.NewTextView().
 		SetDynamicColors(true).
 		SetText("准备就绪...")
-	a.statusBar.SetBorder(true).SetTitle("状态")
+	a.statusBar.SetBorder(true).SetTitle("状态").SetTitleAlign(tview.AlignLeft)
 
 	// 创建确认退出对话框的Grid布局 - 居中显示小框
 	a.confirmGrid = tview.NewGrid().
@@ -95,6 +95,7 @@ func (a *App) initUI() {
 		SetWrap(false)
 	a.confirmBox.SetBorder(true).
 		SetTitle("确认退出").
+		SetTitleAlign(tview.AlignLeft).
 		SetBorderColor(tcell.ColorYellow)
 
 	// 将确认框添加到Grid中央
