@@ -313,11 +313,11 @@ func (a *App) renderTreeView() string {
 	content += "\n[dim]"
 	switch a.treeLevel {
 	case 0:
-		content += "项目级别 - ↑↓/JK: 导航, →/L: 进入环境, Space: 展开/收缩, ESC/Q: 退出"
+		content += "项目级别 - ↑↓/JK: 导航, Space: 展开/收缩, ESC/Q: 退出"
 	case 1:
-		content += "环境级别 - ↑↓/JK: 导航, ←/H: 返回项目, →/L: 进入连接, Space: 展开/收缩"
+		content += "环境级别 - ↑↓/JK: 导航, Space: 展开/收缩, ESC/Q: 退出"
 	case 2:
-		content += "连接级别 - ↑↓/JK: 导航, ←/H: 返回环境, Enter: 连接/断开"
+		content += "连接级别 - ↑↓/JK: 导航, Enter: 连接/断开, ESC/Q: 退出"
 	}
 	content += "[-]"
 
@@ -412,7 +412,7 @@ func (a *App) updateStatusBar() {
 	if a.inTreeView {
 		levelNames := []string{"项目", "环境", "连接"}
 		currentLevel := levelNames[a.treeLevel]
-		statusText = fmt.Sprintf("[yellow]状态: %s[-] | [blue]模块: %s[-] | [green]层级: %s[-] | [gray]↑↓/JK: 导航, ←→/HL: 层级, ESC: 退出[-]",
+		statusText = fmt.Sprintf("[yellow]状态: %s[-] | [blue]模块: %s[-] | [green]层级: %s[-] | [gray]↑↓/JK: 导航, Space: 展开/收缩, ESC: 退出[-]",
 			stateText, a.modules[a.currentModule], currentLevel)
 	} else {
 		statusText = fmt.Sprintf("[yellow]状态: %s[-] | [blue]当前模块: %s[-] | [green]悬停: %s[-] | [gray]←→/H/L: 导航, Enter/Space: 选择, Q: 退出[-]",
@@ -538,12 +538,6 @@ func (a *App) handleTreeNavigation(event *tcell.EventKey) *tcell.EventKey {
 	case tcell.KeyDown:
 		a.moveTreeDown()
 		return nil
-	case tcell.KeyLeft:
-		a.collapseOrMoveUp()
-		return nil
-	case tcell.KeyRight:
-		a.expandOrMoveDown()
-		return nil
 	case tcell.KeyEsc:
 		a.exitTreeView()
 		return nil
@@ -558,12 +552,6 @@ func (a *App) handleTreeNavigation(event *tcell.EventKey) *tcell.EventKey {
 		case 'j', 'J':
 			a.moveTreeDown()
 			return nil
-		case 'h', 'H':
-			a.collapseOrMoveUp()
-			return nil
-		case 'l', 'L':
-			a.expandOrMoveDown()
-			return nil
 		case 'q', 'Q':
 			a.exitTreeView()
 			return nil
@@ -577,77 +565,19 @@ func (a *App) handleTreeNavigation(event *tcell.EventKey) *tcell.EventKey {
 
 // 在树状视图中向上移动
 func (a *App) moveTreeUp() {
-	switch a.treeLevel {
-	case 0: // 项目级别
-		if a.selectedProject > 0 {
-			a.selectedProject--
-			a.updateMainPanel()
-		}
-	case 1: // 环境级别
-		if a.selectedEnv > 0 {
-			a.selectedEnv--
-		} else {
-			a.treeLevel = 0
-		}
-		a.updateMainPanel()
-	case 2: // 连接级别
-		if a.selectedConn > 0 {
-			a.selectedConn--
-		} else {
-			a.treeLevel = 1
-		}
-		a.updateMainPanel()
-	}
+	// 找到上一个可见的节点，不考虑层级
+	a.moveToPreviousVisibleNode()
+	a.updateMainPanel()
 }
 
 // 在树状视图中向下移动
 func (a *App) moveTreeDown() {
-	switch a.treeLevel {
-	case 0: // 项目级别
-		maxProjects := a.getProjectCount() - 1
-		if a.selectedProject < maxProjects {
-			a.selectedProject++
-			a.updateMainPanel()
-		}
-	case 1: // 环境级别
-		maxEnvs := a.getEnvironmentCount() - 1
-		if a.selectedEnv < maxEnvs {
-			a.selectedEnv++
-		} else if a.hasConnections() {
-			a.treeLevel = 2
-			a.selectedConn = 0
-		}
-		a.updateMainPanel()
-	case 2: // 连接级别
-		maxConns := a.getConnectionCount() - 1
-		if a.selectedConn < maxConns {
-			a.selectedConn++
-			a.updateMainPanel()
-		}
-	}
+	// 找到下一个可见的节点，不考虑层级
+	a.moveToNextVisibleNode()
+	a.updateMainPanel()
 }
 
-// 收缩节点或向上移动层级
-func (a *App) collapseOrMoveUp() {
-	switch a.treeLevel {
-	case 2: // 从连接回到环境
-		a.treeLevel = 1
-		// 收缩当前环境
-		envKey := fmt.Sprintf("%s-proj-%d-env-%d", a.modules[a.currentModule], a.selectedProject, a.selectedEnv)
-		a.expandedNodes[envKey] = false
-		a.updateMainPanel()
-	case 1: // 从环境回到项目
-		a.treeLevel = 0
-		// 收缩当前项目
-		projectKey := fmt.Sprintf("%s-proj-%d", a.modules[a.currentModule], a.selectedProject)
-		a.expandedNodes[projectKey] = false
-		a.updateMainPanel()
-	case 0: // 从项目退出树状视图
-		a.exitTreeView()
-	}
-}
-
-// 展开节点或向下移动层级
+// 展开节点或向下移动层级（保留，但不在键盘导航中使用）
 func (a *App) expandOrMoveDown() {
 	switch a.treeLevel {
 	case 0: // 从项目进入环境
@@ -655,7 +585,7 @@ func (a *App) expandOrMoveDown() {
 		projectKey := fmt.Sprintf("%s-proj-%d", a.modules[a.currentModule], a.selectedProject)
 		a.expandedNodes[projectKey] = true
 
-		if a.getEnvironmentCount() > 0 {
+		if len(a.getEnvironmentList(a.selectedProject)) > 0 {
 			a.treeLevel = 1
 			a.selectedEnv = 0
 			a.updateMainPanel()
@@ -665,7 +595,7 @@ func (a *App) expandOrMoveDown() {
 		envKey := fmt.Sprintf("%s-proj-%d-env-%d", a.modules[a.currentModule], a.selectedProject, a.selectedEnv)
 		a.expandedNodes[envKey] = true
 
-		if a.hasConnections() {
+		if len(a.getConnectionList(a.selectedProject, a.selectedEnv)) > 0 {
 			a.treeLevel = 2
 			a.selectedConn = 0
 			a.updateMainPanel()
@@ -675,40 +605,117 @@ func (a *App) expandOrMoveDown() {
 
 // 切换节点展开状态
 func (a *App) toggleExpansion() {
-	nodeKey := a.getCurrentNodeKey()
-	a.expandedNodes[nodeKey] = !a.expandedNodes[nodeKey]
+	switch a.treeLevel {
+	case 0: // 项目级别
+		projectKey := fmt.Sprintf("%s-proj-%d", a.modules[a.currentModule], a.selectedProject)
+		a.expandedNodes[projectKey] = !a.expandedNodes[projectKey]
+	case 1: // 环境级别
+		envKey := fmt.Sprintf("%s-proj-%d-env-%d", a.modules[a.currentModule], a.selectedProject, a.selectedEnv)
+		a.expandedNodes[envKey] = !a.expandedNodes[envKey]
+	}
 	a.updateMainPanel()
+}
+
+// 移动到上一个可见的节点
+func (a *App) moveToPreviousVisibleNode() {
+	// 构建所有可见节点的列表
+	visibleNodes := a.getVisibleNodes()
+
+	// 找到当前节点在列表中的位置
+	currentIndex := a.findCurrentNodeIndex(visibleNodes)
+
+	// 移动到上一个节点
+	if currentIndex > 0 {
+		prevNode := visibleNodes[currentIndex-1]
+		a.setCurrentNode(prevNode)
+	}
+}
+
+// 移动到下一个可见的节点
+func (a *App) moveToNextVisibleNode() {
+	// 构建所有可见节点的列表
+	visibleNodes := a.getVisibleNodes()
+
+	// 找到当前节点在列表中的位置
+	currentIndex := a.findCurrentNodeIndex(visibleNodes)
+
+	// 移动到下一个节点
+	if currentIndex < len(visibleNodes)-1 {
+		nextNode := visibleNodes[currentIndex+1]
+		a.setCurrentNode(nextNode)
+	}
+}
+
+// 节点表示结构
+type TreeNode struct {
+	Level   int // 0=项目, 1=环境, 2=连接
+	Project int
+	Env     int
+	Conn    int
+}
+
+// 获取所有可见的节点
+func (a *App) getVisibleNodes() []TreeNode {
+	var nodes []TreeNode
+	projects := a.getProjectList()
+
+	for i := range projects {
+		// 添加项目节点
+		nodes = append(nodes, TreeNode{Level: 0, Project: i, Env: -1, Conn: -1})
+
+		// 检查项目是否展开
+		projectKey := fmt.Sprintf("%s-proj-%d", a.modules[a.currentModule], i)
+		if a.expandedNodes[projectKey] {
+			environments := a.getEnvironmentList(i)
+			for j := range environments {
+				// 添加环境节点
+				nodes = append(nodes, TreeNode{Level: 1, Project: i, Env: j, Conn: -1})
+
+				// 检查环境是否展开
+				envKey := fmt.Sprintf("%s-proj-%d-env-%d", a.modules[a.currentModule], i, j)
+				if a.expandedNodes[envKey] {
+					connections := a.getConnectionList(i, j)
+					for k := range connections {
+						// 添加连接节点
+						nodes = append(nodes, TreeNode{Level: 2, Project: i, Env: j, Conn: k})
+					}
+				}
+			}
+		}
+	}
+
+	return nodes
+}
+
+// 找到当前节点在可见节点列表中的索引
+func (a *App) findCurrentNodeIndex(visibleNodes []TreeNode) int {
+	for i, node := range visibleNodes {
+		if node.Level == a.treeLevel &&
+			node.Project == a.selectedProject &&
+			(node.Level == 0 || node.Env == a.selectedEnv) &&
+			(node.Level <= 1 || node.Conn == a.selectedConn) {
+			return i
+		}
+	}
+	return 0
+}
+
+// 设置当前节点
+func (a *App) setCurrentNode(node TreeNode) {
+	a.treeLevel = node.Level
+	a.selectedProject = node.Project
+	if node.Level >= 1 {
+		a.selectedEnv = node.Env
+	}
+	if node.Level >= 2 {
+		a.selectedConn = node.Conn
+	}
 }
 
 // 激活当前选中的树项目
 func (a *App) activateTreeItem() {
 	// 这里可以实现连接操作等
 	a.updateStatusBar()
-}
-
-// 获取当前节点的唯一标识符
-func (a *App) getCurrentNodeKey() string {
-	return fmt.Sprintf("%s-%d-%d-%d", a.modules[a.currentModule], a.selectedProject, a.selectedEnv, a.selectedConn)
-}
-
-// 获取项目数量
-func (a *App) getProjectCount() int {
-	return len(a.getProjectList())
-}
-
-// 获取环境数量
-func (a *App) getEnvironmentCount() int {
-	return len(a.getEnvironmentList(a.selectedProject))
-}
-
-// 获取连接数量
-func (a *App) getConnectionCount() int {
-	return len(a.getConnectionList(a.selectedProject, a.selectedEnv))
-}
-
-// 检查是否有连接
-func (a *App) hasConnections() bool {
-	return a.getConnectionCount() > 0
 }
 
 // 运行应用程序
