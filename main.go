@@ -19,7 +19,6 @@ const (
 
 // 应用程序主结构体，包含所有UI组件和状态信息
 type App struct {
-	// tview相关组件
 	app         *tview.Application // 主应用程序实例
 	grid        *tview.Grid        // 主Grid布局容器
 	moduleBar   *tview.TextView    // 顶部模块栏，显示模块选择
@@ -32,7 +31,16 @@ type App struct {
 	state          AppState // 当前应用状态（Normal或Edit）
 	modules        []string // 可用的模块列表
 	currentModule  int      // 当前选中的模块索引
+	hoveredModule  int      // 当前悬停的模块索引（键盘导航）
 	showingConfirm bool     // 是否正在显示确认对话框
+
+	// 树状结构导航状态
+	inTreeView      bool            // 是否进入了树状视图导航模式
+	selectedProject int             // 当前选中的项目索引
+	selectedEnv     int             // 当前选中的环境索引
+	selectedConn    int             // 当前选中的连接索引
+	treeLevel       int             // 当前所在的树级别 (0=项目, 1=环境, 2=连接)
+	expandedNodes   map[string]bool // 展开状态记录
 }
 
 // 创建新的应用程序实例，初始化所有默认值
@@ -42,7 +50,16 @@ func NewApp() *App {
 		state:          Normal,                                          // 初始状态为Normal
 		modules:        []string{"SSH", "MySQL", "PostgreSQL", "Redis"}, // 定义可用模块列表
 		currentModule:  0,                                               // 默认选中第一个模块（SSH）
+		hoveredModule:  0,                                               // 默认悬停模块与选中模块一致
 		showingConfirm: false,                                           // 初始不显示确认对话框
+
+		// 树状结构导航初始状态
+		inTreeView:      false,                 // 初始不在树状视图中
+		selectedProject: 0,                     // 默认选中第一个项目
+		selectedEnv:     0,                     // 默认选中第一个环境
+		selectedConn:    0,                     // 默认选中第一个连接
+		treeLevel:       0,                     // 初始在项目级别
+		expandedNodes:   make(map[string]bool), // 初始化展开状态映射
 	}
 }
 
@@ -131,13 +148,6 @@ func (a *App) initUI() {
 	a.app.SetRoot(a.grid, true)
 }
 
-// 更新整个界面内容
-func (a *App) updateUI() {
-	a.updateModuleBar() // 更新模块栏
-	a.updateMainPanel() // 更新主面板
-	a.updateStatusBar() // 更新状态栏
-}
-
 // 设置初始焦点
 func (a *App) setInitialFocus() {
 	a.moduleBar.SetBorderColor(tcell.ColorYellow)
@@ -155,10 +165,13 @@ func (a *App) updateModuleBar() {
 		}
 
 		if i == a.currentModule {
-			// 选中状态：高亮显示
-			content += fmt.Sprintf("[white:blue:b] %s [-:-:-]", module)
+			// 已选中状态：蓝色背景 + 方括号
+			content += fmt.Sprintf("[white:blue:b][ %s ][-:-:-]", module)
+		} else if i == a.hoveredModule && i != a.currentModule {
+			// 悬停状态：黄色边框 + 方括号
+			content += fmt.Sprintf("[yellow][ %s ][-]", module)
 		} else {
-			// 未选中状态：正常显示
+			// 普通状态：无边框
 			content += fmt.Sprintf(" %s ", module)
 		}
 	}
@@ -169,53 +182,214 @@ func (a *App) updateModuleBar() {
 // 更新主面板显示（中间主要内容）
 func (a *App) updateMainPanel() {
 	currentModule := a.modules[a.currentModule]
-	content := fmt.Sprintf("[yellow]%s 连接管理[-]\n\n", currentModule)
+	// 更新主面板标题为当前选中的模块
+	a.mainPanel.SetTitle(fmt.Sprintf("%s 连接管理", currentModule))
+
+	if a.inTreeView {
+		content := a.renderTreeView()
+		a.mainPanel.SetText(content)
+	} else {
+		content := a.renderOverview()
+		a.mainPanel.SetText(content)
+	}
+}
+
+// 渲染概览视图（非树状导航模式）
+func (a *App) renderOverview() string {
+	currentModule := a.modules[a.currentModule]
+	content := fmt.Sprintf("[yellow]%s 连接管理概览[-]\n\n", currentModule)
+	content += "按 [white:blue]Enter[-] 或 [white:blue]Space[-] 进入树状导航模式\n\n"
 
 	switch currentModule {
 	case "SSH":
-		content += "SSH 连接配置:\n\n"
-		content += "主机: example.com\n"
-		content += "端口: 22\n"
-		content += "用户: user\n"
-		content += "认证: 密钥认证\n\n"
-		content += "[green]连接状态: 就绪[-]\n\n"
-		content += "可用连接:\n"
-		content += "• SSH-Server-01 (192.168.1.10)\n"
-		content += "• SSH-Server-02 (192.168.1.11)\n"
-		content += "• Production-Server (prod.example.com)\n"
+		content += "📁 可用项目:\n"
+		content += "  • Web服务器项目 (3个环境, 9个连接)\n"
+		content += "  • 数据库项目 (2个环境, 6个连接)\n"
+		content += "  • 开发环境项目 (2个环境, 4个连接)\n\n"
 	case "MySQL":
-		content += "MySQL 数据库配置:\n\n"
-		content += "主机: localhost\n"
-		content += "端口: 3306\n"
-		content += "数据库: myapp\n"
-		content += "用户: root\n\n"
-		content += "[red]连接状态: 未连接[-]\n\n"
-		content += "可用数据库:\n"
-		content += "• MySQL-DB-01 (localhost:3306)\n"
-		content += "• MySQL-DB-02 (db.example.com:3306)\n"
+		content += "📁 可用项目:\n"
+		content += "  • 生产数据库 (3个环境, 9个实例)\n"
+		content += "  • 分析数据库 (2个环境, 6个实例)\n"
+		content += "  • 测试数据库 (1个环境, 3个实例)\n\n"
 	case "PostgreSQL":
-		content += "PostgreSQL 数据库配置:\n\n"
-		content += "主机: localhost\n"
-		content += "端口: 5432\n"
-		content += "数据库: postgres\n"
-		content += "用户: postgres\n\n"
-		content += "[yellow]连接状态: 连接中...[-]\n\n"
-		content += "可用数据库:\n"
-		content += "• PostgreSQL-Main (localhost:5432)\n"
-		content += "• PostgreSQL-Analytics (analytics.example.com:5432)\n"
+		content += "📁 可用项目:\n"
+		content += "  • 主业务数据库 (3个环境, 9个实例)\n"
+		content += "  • 报表数据库 (2个环境, 6个实例)\n"
+		content += "  • 备份数据库 (1个环境, 3个实例)\n\n"
 	case "Redis":
-		content += "Redis 缓存配置:\n\n"
-		content += "主机: localhost\n"
-		content += "端口: 6379\n"
-		content += "数据库: 0\n"
-		content += "认证: 无\n\n"
-		content += "[green]连接状态: 已连接[-]\n\n"
-		content += "可用缓存实例:\n"
-		content += "• Redis-Cache-01 (localhost:6379)\n"
-		content += "• Redis-Session (session.example.com:6379)\n"
+		content += "📁 可用项目:\n"
+		content += "  • 缓存集群 (3个环境, 9个实例)\n"
+		content += "  • 会话存储 (2个环境, 6个实例)\n"
+		content += "  • 消息队列 (2个环境, 4个实例)\n\n"
 	}
 
-	a.mainPanel.SetText(content)
+	content += "[dim]按 Enter 进入树状导航，在树状模式中可以管理具体的连接[-]"
+	return content
+}
+
+// 渲染树状视图
+func (a *App) renderTreeView() string {
+	currentModule := a.modules[a.currentModule]
+	content := fmt.Sprintf("[yellow]%s 树状导航模式[-]\n\n", currentModule)
+
+	// 获取项目列表
+	projects := a.getProjectList()
+
+	for i, project := range projects {
+		// 左侧箭头指示器（始终在最左侧）
+		arrowIndicator := ""
+		if a.treeLevel == 0 && i == a.selectedProject {
+			arrowIndicator = "[yellow]►[-] "
+		} else {
+			arrowIndicator = "  "
+		}
+
+		// 项目展开状态
+		projectKey := fmt.Sprintf("%s-proj-%d", currentModule, i)
+		isProjectExpanded := a.expandedNodes[projectKey]
+		expandIcon := "+"
+		if isProjectExpanded {
+			expandIcon = "-"
+		}
+
+		content += fmt.Sprintf("%s\t[%s] %s\n", arrowIndicator, expandIcon, project.Name)
+
+		// 如果项目展开，显示环境
+		if isProjectExpanded {
+			environments := a.getEnvironmentList(i)
+			for j, env := range environments {
+				// 左侧箭头指示器（始终在最左侧）
+				arrowIndicator := ""
+				if a.treeLevel == 1 && i == a.selectedProject && j == a.selectedEnv {
+					arrowIndicator = "[yellow]►[-] "
+				} else {
+					arrowIndicator = "  "
+				}
+
+				// 环境展开状态
+				envKey := fmt.Sprintf("%s-proj-%d-env-%d", currentModule, i, j)
+				isEnvExpanded := a.expandedNodes[envKey]
+				envExpandIcon := "+"
+				if isEnvExpanded {
+					envExpandIcon = "-"
+				}
+
+				content += fmt.Sprintf("%s\t\t[%s] %s\n", arrowIndicator, envExpandIcon, env.Name)
+
+				// 如果环境展开，显示连接
+				if isEnvExpanded {
+					connections := a.getConnectionList(i, j)
+					for k, conn := range connections {
+						// 左侧箭头指示器（始终在最左侧）
+						connArrowIndicator := ""
+						if a.treeLevel == 2 && i == a.selectedProject && j == a.selectedEnv && k == a.selectedConn {
+							connArrowIndicator = "[yellow]►[-] "
+						} else {
+							connArrowIndicator = "  "
+						}
+
+						statusColor := "green"
+						statusText := "已连接"
+						switch conn.Status {
+						case "connected":
+							statusColor = "green"
+							statusText = "已连接"
+						case "disconnected":
+							statusColor = "red"
+							statusText = "断开"
+						case "connecting":
+							statusColor = "yellow"
+							statusText = "连接中"
+						}
+
+						content += fmt.Sprintf("%s\t\t\t%s ([%s]%s[-])\n", connArrowIndicator, conn.Name, statusColor, statusText)
+					}
+				}
+			}
+		}
+	}
+
+	// 添加操作提示
+	content += "\n[dim]"
+	switch a.treeLevel {
+	case 0:
+		content += "项目级别 - ↑↓/JK: 导航, →/L: 进入环境, Space: 展开/收缩, ESC/Q: 退出"
+	case 1:
+		content += "环境级别 - ↑↓/JK: 导航, ←/H: 返回项目, →/L: 进入连接, Space: 展开/收缩"
+	case 2:
+		content += "连接级别 - ↑↓/JK: 导航, ←/H: 返回环境, Enter: 连接/断开"
+	}
+	content += "[-]"
+
+	return content
+}
+
+// 项目数据结构
+type Project struct {
+	Name string
+}
+
+type Environment struct {
+	Name string
+}
+
+type Connection struct {
+	Name   string
+	Status string
+}
+
+// 获取项目列表
+func (a *App) getProjectList() []Project {
+	currentModule := a.modules[a.currentModule]
+	switch currentModule {
+	case "SSH":
+		return []Project{
+			{Name: "Web服务器项目"},
+			{Name: "数据库项目"},
+			{Name: "开发环境项目"},
+		}
+	case "MySQL":
+		return []Project{
+			{Name: "生产数据库"},
+			{Name: "分析数据库"},
+			{Name: "测试数据库"},
+		}
+	case "PostgreSQL":
+		return []Project{
+			{Name: "主业务数据库"},
+			{Name: "报表数据库"},
+			{Name: "备份数据库"},
+		}
+	case "Redis":
+		return []Project{
+			{Name: "缓存集群"},
+			{Name: "会话存储"},
+			{Name: "消息队列"},
+		}
+	}
+	return []Project{}
+}
+
+// 获取环境列表
+func (a *App) getEnvironmentList(projectIndex int) []Environment {
+	if projectIndex == 2 { // 第三个项目只有1个环境
+		return []Environment{{Name: "开发环境"}}
+	}
+	return []Environment{
+		{Name: "生产环境"},
+		{Name: "测试环境"},
+	}
+}
+
+// 获取连接列表
+func (a *App) getConnectionList(projectIndex, envIndex int) []Connection {
+	currentModule := a.modules[a.currentModule]
+	baseConnections := []Connection{
+		{Name: fmt.Sprintf("%s-01", currentModule), Status: "connected"},
+		{Name: fmt.Sprintf("%s-02", currentModule), Status: "disconnected"},
+		{Name: fmt.Sprintf("%s-03", currentModule), Status: "connecting"},
+	}
+	return baseConnections
 }
 
 // 更新确认对话框显示
@@ -234,8 +408,16 @@ func (a *App) updateStatusBar() {
 		stateText = "Edit"
 	}
 
-	statusText := fmt.Sprintf("[yellow]状态: %s[-] | [blue]当前模块: %s[-] | [gray]Q: 退出, ←→/H/L: 切换模块[-]",
-		stateText, a.modules[a.currentModule])
+	var statusText string
+	if a.inTreeView {
+		levelNames := []string{"项目", "环境", "连接"}
+		currentLevel := levelNames[a.treeLevel]
+		statusText = fmt.Sprintf("[yellow]状态: %s[-] | [blue]模块: %s[-] | [green]层级: %s[-] | [gray]↑↓/JK: 导航, ←→/HL: 层级, ESC: 退出[-]",
+			stateText, a.modules[a.currentModule], currentLevel)
+	} else {
+		statusText = fmt.Sprintf("[yellow]状态: %s[-] | [blue]当前模块: %s[-] | [green]悬停: %s[-] | [gray]←→/H/L: 导航, Enter/Space: 选择, Q: 退出[-]",
+			stateText, a.modules[a.currentModule], a.modules[a.hoveredModule])
+	}
 
 	a.statusBar.SetText(statusText)
 }
@@ -263,24 +445,36 @@ func (a *App) handleKeyEvent(event *tcell.EventKey) *tcell.EventKey {
 		return event
 	}
 
-	switch event.Key() {
-	case tcell.KeyLeft:
-		a.moveToPreviousModule()
-		return nil
-	case tcell.KeyRight:
-		a.moveToNextModule()
-		return nil
-	case tcell.KeyRune:
-		switch event.Rune() {
-		case 'h', 'H':
-			a.moveToPreviousModule()
+	if a.inTreeView {
+		// 树状视图中的导航
+		return a.handleTreeNavigation(event)
+	} else {
+		// 模块栏导航
+		switch event.Key() {
+		case tcell.KeyLeft:
+			a.moveToPreviousHover()
 			return nil
-		case 'l', 'L':
-			a.moveToNextModule()
+		case tcell.KeyRight:
+			a.moveToNextHover()
 			return nil
-		case 'q', 'Q':
-			a.showExitConfirmation()
+		case tcell.KeyEnter:
+			a.enterTreeView()
 			return nil
+		case tcell.KeyRune:
+			switch event.Rune() {
+			case 'h', 'H':
+				a.moveToPreviousHover()
+				return nil
+			case 'l', 'L':
+				a.moveToNextHover()
+				return nil
+			case ' ': // 空格键也可以进入树状视图
+				a.enterTreeView()
+				return nil
+			case 'q', 'Q':
+				a.showExitConfirmation()
+				return nil
+			}
 		}
 	}
 
@@ -300,20 +494,221 @@ func (a *App) hideExitConfirmation() {
 	a.app.SetRoot(a.grid, true)
 }
 
-// 移动到上一个模块
-func (a *App) moveToPreviousModule() {
-	if a.currentModule > 0 {
-		a.currentModule--
-		a.updateUI()
+// 移动到上一个模块（悬停状态）
+func (a *App) moveToPreviousHover() {
+	if a.hoveredModule > 0 {
+		a.hoveredModule--
+		a.updateModuleBar()
 	}
 }
 
-// 移动到下一个模块
-func (a *App) moveToNextModule() {
-	if a.currentModule < len(a.modules)-1 {
-		a.currentModule++
-		a.updateUI()
+// 移动到下一个模块（悬停状态）
+func (a *App) moveToNextHover() {
+	if a.hoveredModule < len(a.modules)-1 {
+		a.hoveredModule++
+		a.updateModuleBar()
 	}
+}
+
+// 进入树状视图
+func (a *App) enterTreeView() {
+	a.currentModule = a.hoveredModule
+	a.inTreeView = true
+	a.treeLevel = 0
+	a.selectedProject = 0
+	a.selectedEnv = 0
+	a.selectedConn = 0
+	a.updateMainPanel()
+	a.updateStatusBar()
+	a.updateModuleBar()
+}
+
+// 退出树状视图
+func (a *App) exitTreeView() {
+	a.inTreeView = false
+	a.updateStatusBar()
+}
+
+// 处理树状视图中的键盘导航
+func (a *App) handleTreeNavigation(event *tcell.EventKey) *tcell.EventKey {
+	switch event.Key() {
+	case tcell.KeyUp:
+		a.moveTreeUp()
+		return nil
+	case tcell.KeyDown:
+		a.moveTreeDown()
+		return nil
+	case tcell.KeyLeft:
+		a.collapseOrMoveUp()
+		return nil
+	case tcell.KeyRight:
+		a.expandOrMoveDown()
+		return nil
+	case tcell.KeyEsc:
+		a.exitTreeView()
+		return nil
+	case tcell.KeyEnter:
+		a.activateTreeItem()
+		return nil
+	case tcell.KeyRune:
+		switch event.Rune() {
+		case 'k', 'K':
+			a.moveTreeUp()
+			return nil
+		case 'j', 'J':
+			a.moveTreeDown()
+			return nil
+		case 'h', 'H':
+			a.collapseOrMoveUp()
+			return nil
+		case 'l', 'L':
+			a.expandOrMoveDown()
+			return nil
+		case 'q', 'Q':
+			a.exitTreeView()
+			return nil
+		case ' ':
+			a.toggleExpansion()
+			return nil
+		}
+	}
+	return event
+}
+
+// 在树状视图中向上移动
+func (a *App) moveTreeUp() {
+	switch a.treeLevel {
+	case 0: // 项目级别
+		if a.selectedProject > 0 {
+			a.selectedProject--
+			a.updateMainPanel()
+		}
+	case 1: // 环境级别
+		if a.selectedEnv > 0 {
+			a.selectedEnv--
+		} else {
+			a.treeLevel = 0
+		}
+		a.updateMainPanel()
+	case 2: // 连接级别
+		if a.selectedConn > 0 {
+			a.selectedConn--
+		} else {
+			a.treeLevel = 1
+		}
+		a.updateMainPanel()
+	}
+}
+
+// 在树状视图中向下移动
+func (a *App) moveTreeDown() {
+	switch a.treeLevel {
+	case 0: // 项目级别
+		maxProjects := a.getProjectCount() - 1
+		if a.selectedProject < maxProjects {
+			a.selectedProject++
+			a.updateMainPanel()
+		}
+	case 1: // 环境级别
+		maxEnvs := a.getEnvironmentCount() - 1
+		if a.selectedEnv < maxEnvs {
+			a.selectedEnv++
+		} else if a.hasConnections() {
+			a.treeLevel = 2
+			a.selectedConn = 0
+		}
+		a.updateMainPanel()
+	case 2: // 连接级别
+		maxConns := a.getConnectionCount() - 1
+		if a.selectedConn < maxConns {
+			a.selectedConn++
+			a.updateMainPanel()
+		}
+	}
+}
+
+// 收缩节点或向上移动层级
+func (a *App) collapseOrMoveUp() {
+	switch a.treeLevel {
+	case 2: // 从连接回到环境
+		a.treeLevel = 1
+		// 收缩当前环境
+		envKey := fmt.Sprintf("%s-proj-%d-env-%d", a.modules[a.currentModule], a.selectedProject, a.selectedEnv)
+		a.expandedNodes[envKey] = false
+		a.updateMainPanel()
+	case 1: // 从环境回到项目
+		a.treeLevel = 0
+		// 收缩当前项目
+		projectKey := fmt.Sprintf("%s-proj-%d", a.modules[a.currentModule], a.selectedProject)
+		a.expandedNodes[projectKey] = false
+		a.updateMainPanel()
+	case 0: // 从项目退出树状视图
+		a.exitTreeView()
+	}
+}
+
+// 展开节点或向下移动层级
+func (a *App) expandOrMoveDown() {
+	switch a.treeLevel {
+	case 0: // 从项目进入环境
+		// 展开当前项目
+		projectKey := fmt.Sprintf("%s-proj-%d", a.modules[a.currentModule], a.selectedProject)
+		a.expandedNodes[projectKey] = true
+
+		if a.getEnvironmentCount() > 0 {
+			a.treeLevel = 1
+			a.selectedEnv = 0
+			a.updateMainPanel()
+		}
+	case 1: // 从环境进入连接
+		// 展开当前环境
+		envKey := fmt.Sprintf("%s-proj-%d-env-%d", a.modules[a.currentModule], a.selectedProject, a.selectedEnv)
+		a.expandedNodes[envKey] = true
+
+		if a.hasConnections() {
+			a.treeLevel = 2
+			a.selectedConn = 0
+			a.updateMainPanel()
+		}
+	}
+}
+
+// 切换节点展开状态
+func (a *App) toggleExpansion() {
+	nodeKey := a.getCurrentNodeKey()
+	a.expandedNodes[nodeKey] = !a.expandedNodes[nodeKey]
+	a.updateMainPanel()
+}
+
+// 激活当前选中的树项目
+func (a *App) activateTreeItem() {
+	// 这里可以实现连接操作等
+	a.updateStatusBar()
+}
+
+// 获取当前节点的唯一标识符
+func (a *App) getCurrentNodeKey() string {
+	return fmt.Sprintf("%s-%d-%d-%d", a.modules[a.currentModule], a.selectedProject, a.selectedEnv, a.selectedConn)
+}
+
+// 获取项目数量
+func (a *App) getProjectCount() int {
+	return len(a.getProjectList())
+}
+
+// 获取环境数量
+func (a *App) getEnvironmentCount() int {
+	return len(a.getEnvironmentList(a.selectedProject))
+}
+
+// 获取连接数量
+func (a *App) getConnectionCount() int {
+	return len(a.getConnectionList(a.selectedProject, a.selectedEnv))
+}
+
+// 检查是否有连接
+func (a *App) hasConnections() bool {
+	return a.getConnectionCount() > 0
 }
 
 // 运行应用程序
